@@ -1,0 +1,180 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+<meta charset="UTF-8">
+<title>Orbit Rush</title>
+<style>
+  body { font-family: Arial; background: #0b0f1a; color:#fff; text-align:center; margin:0; padding:0; }
+  canvas{ display:block; margin:auto; background: radial-gradient(circle,#111 30%,#000); }
+  button{ padding:6px 12px; margin:5px; cursor:pointer; }
+  #ui{ display:flex; justify-content:space-around; margin:10px; }
+  #shop{ margin:20px; }
+  #ranking{ margin:10px; text-align:left; display:inline-block; }
+  #ad{ margin:20px; padding:10px; background:#111; }
+</style>
+<!-- Firebase -->
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
+<script>
+/* ==================== FIREBASE CONFIG ==================== */
+const firebaseConfig = {
+  apiKey: "SUA_API_KEY",
+  authDomain: "SEU_DOMINIO",
+  projectId: "SEU_PROJECT_ID"
+};
+firebase.initializeApp(firebaseConfig);
+const auth = firebase.auth();
+const db = firebase.firestore();
+
+/* ==================== VARIÁVEIS GLOBAIS ==================== */
+let coins=0, ownedSkins=["default"], selectedSkin="default";
+let user=null;
+
+/* ==================== AUTENTICAÇÃO ==================== */
+function login() {
+  const email = prompt("Email:");
+  const pass = prompt("Senha:");
+  auth.signInWithEmailAndPassword(email, pass)
+    .catch(() => auth.createUserWithEmailAndPassword(email, pass));
+}
+
+auth.onAuthStateChanged(async u=>{
+  if(!u) return;
+  user = u;
+
+  // Bloqueio de banidos
+  const ban = await db.collection("bans").doc(user.uid).get();
+  if(ban.exists){ alert("Conta banida!"); location.reload(); return; }
+
+  // Carregar moedas e skins
+  const doc = await db.collection("users").doc(user.uid).get();
+  if(doc.exists){
+    coins = doc.data().coins || 0;
+    ownedSkins = doc.data().skins || ["default"];
+    selectedSkin = doc.data().skin || "default";
+  }
+  renderShop();
+});
+
+/* ==================== LOJA DE SKINS ==================== */
+const skins=[
+  {id:"default", price:0, color:"#00eaff"},
+  {id:"fire", price:50, color:"orange"},
+  {id:"gold", price:200, color:"gold"},
+  {id:"neon", price:0, animated:true}
+];
+
+function renderShop(){
+  const shop=document.getElementById("shop");
+  shop.innerHTML="";
+  skins.forEach(s=>{
+    const owned=ownedSkins.includes(s.id);
+    shop.innerHTML+=`
+      <div style="margin:10px">
+        <span style="color:${s.color}">●</span>
+        ${s.id.toUpperCase()} - ${s.price} moedas
+        <button onclick="buySkin('${s.id}')">${owned?"Usar":"Comprar"}</button>
+      </div>`;
+  });
+}
+
+function buySkin(id){
+  const skin=skins.find(s=>s.id===id);
+  if(ownedSkins.includes(id)){ selectedSkin=id; }
+  else if(coins>=skin.price){ coins-=skin.price; ownedSkins.push(id); selectedSkin=id; }
+  else{ alert("Moedas insuficientes"); return; }
+
+  db.collection("users").doc(user.uid).set({coins, skins:ownedSkins, skin:selectedSkin},{merge:true});
+  renderShop();
+}
+
+/* ==================== RANKING ONLINE ==================== */
+function saveScore(score){
+  if(!user) return;
+  db.collection("ranking").add({
+    uid:user.uid, name:user.email, score, country:"PT", date:Date.now()
+  });
+}
+
+db.collection("ranking").orderBy("score","desc").limit(10).onSnapshot(snap=>{
+  const list=document.getElementById("ranking");
+  list.innerHTML="";
+  snap.forEach(d=> list.innerHTML+=`<li>${d.data().name} - ${d.data().score}</li>`);
+});
+
+/* ==================== JOGO ORBIT RUSH ==================== */
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+let angle=0, radius=120, speed=0.05, score=0, running=true;
+let obstacles=[];
+
+// Alterna raio ao clicar
+document.addEventListener("click",()=>{ radius = radius===120?70:120 });
+
+// Obstáculos
+function spawnObstacle(){ obstacles.push({y:-20, gap:Math.random()>0.5?70:120}); }
+setInterval(spawnObstacle,1200);
+
+// Loop do jogo
+function loop() {
+  if(!running) return;
+  ctx.clearRect(0,0,canvas.width,canvas.height);
+  const cx=canvas.width/2, cy=canvas.height/2+100;
+  angle+=speed;
+  const x=cx+Math.cos(angle)*radius;
+  const y=cy+Math.sin(angle)*radius;
+
+  // Jogador
+  ctx.fillStyle = getSkinColor();
+  ctx.beginPath();
+  ctx.arc(x,y,8,0,Math.PI*2);
+  ctx.fill();
+
+  // Obstáculos
+  ctx.fillStyle="#ff3b3b";
+  obstacles.forEach(o=>{
+    o.y+=3;
+    ctx.fillRect(cx-5,o.y,10,30);
+    if(Math.abs(o.y-y)<15 && radius===o.gap) crash();
+  });
+  obstacles = obstacles.filter(o=>o.y<canvas.height);
+
+  score++;
+  if(score%50===0) coins++;
+  document.getElementById("score").innerText=score;
+  document.getElementById("coins").innerText=coins;
+
+  requestAnimationFrame(loop);
+}
+
+function crash(){
+  running=false;
+  saveScore(score);
+  alert(`💥 Game Over! Pontos: ${score}`);
+  if(user) db.collection("users").doc(user.uid).set({coins},{merge:true});
+  location.reload();
+}
+
+function getSkinColor(){
+  if(selectedSkin==="neon") return `hsl(${Date.now()/10%360},100%,50%)`;
+  return skins.find(s=>s.id===selectedSkin)?.color || "#00eaff";
+}
+
+loop();
+</script>
+</head>
+<body>
+<h1>🔥 Orbit Rush</h1>
+<button onclick="login()">Login</button>
+<div id="ui">
+  <div>⭐ Pontos: <span id="score">0</span></div>
+  <div>💰 Moedas: <span id="coins">0</span></div>
+</div>
+<canvas id="game" width="400" height="600"></canvas>
+<div id="shop"></div>
+<h2>🏆 Ranking</h2>
+<ul id="ranking"></ul>
+<div id="ad">📢 Espaço para anúncio</div>
+</body>
+</html>
